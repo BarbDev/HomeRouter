@@ -1,0 +1,218 @@
+#!/bin/bash
+ethtool -K enp1s0 tso off gso off gro off
+ethtool -K enp2s0 tso off gso off gro off
+ethtool -K enp3s0 tso off gso off gro off
+ethtool -K wlp4s0 tso off gso off gro off
+modprobe ipt_conntrack
+modprobe br_netfilter
+modprobe xt_ndpi
+DOWNLINK=4500
+UPLINK=660
+WEBINT=enp1s0
+####################################################################################
+# Set up traffic shaping
+# delete all old stuff first
+tc qdisc del dev ${WEBINT} root #2> /dev/null > /dev/null
+tc qdisc del dev ${WEBINT} ingress #2> /dev/null > /dev/null
+
+tc qdisc del dev enp2s0 root #2> /dev/null > /dev/null
+tc qdisc del dev enp2s0 ingress #2> /dev/null > /dev/null
+tc qdisc del dev enp3s0 root #2> /dev/null > /dev/null
+tc qdisc del dev enp3s0 ingress #2> /dev/null > /dev/null
+tc qdisc del dev wlp4s0 root #2> /dev/null > /dev/null
+tc qdisc del dev wlp4s0 ingress #2> /dev/null > /dev/null
+
+#################################################################################################
+## downlink ##
+tc qdisc add dev enp2s0 root handle 1: hfsc default 1000
+tc class add dev enp2s0 parent 1:0 classid 1:999 hfsc ls rate ${DOWNLINK} ul rate ${DOWNLINK}kbps
+tc class add dev enp2s0 parent 1:0 classid 1:1000 hfsc ls rate 900mbit ul rate 900mbit #1gbit
+tc qdisc add dev enp3s0 root handle 1: hfsc default 1000
+tc class add dev enp3s0 parent 1:0 classid 1:1000 hfsc ls rate 900mbit ul rate 900mbit #1gbit
+tc class add dev enp3s0 parent 1:0 classid 1:999 hfsc ls rate ${DOWNLINK} ul rate ${DOWNLINK}kbps
+tc qdisc add dev wlp4s0 root handle 1: hfsc default 1000
+tc class add dev wlp4s0 parent 1:0 classid 1:1000 hfsc ls rate 900mbit ul rate 900mbit #1gbit
+tc class add dev wlp4s0 parent 1:0 classid 1:999 hfsc ls rate ${DOWNLINK} ul rate ${DOWNLINK}kbps
+
+tc qdisc add dev enp2s0 parent 1:999 handle 9991: fq_codel
+tc qdisc add dev enp3s0 parent 1:999 handle 9991: fq_codel
+tc qdisc add dev wlp4s0 parent 1:999 handle 9991: fq_codel
+########################################## End of downlink configuration ##########################################
+
+###################################################################################################################
+## uplink via ${WEBINT} ##
+# rt = realtime
+# ls = link sharing
+# ul = upper limit
+# sc = service curve ( instead of rt and ls)
+# :1 INTERNET
+# :5 GAME
+# :10 INTERACTIVE
+# :20 STERAMING
+# :30 WEB
+# :40 DEFAULT
+# :50 BULK
+# Default class 40
+#tc qdisc add dev ${WEBINT} root handle 1: fq_codel
+tc qdisc add dev ${WEBINT} root handle 1: hfsc default 40
+tc class add dev ${WEBINT} parent 1:0 classid 1:1000 hfsc ls rate 900mbit ul rate 900mbit #1gbit
+tc class add dev ${WEBINT} parent 1:0 classid 1:1 hfsc ls rate ${UPLINK} ul rate ${UPLINK}kbps
+tc class add dev ${WEBINT} parent 1:1 classid 1:5 hfsc rt umax 1540 dmax 5ms rate 192kbps
+tc class add dev ${WEBINT} parent 1:1 classid 1:10 hfsc ls umax 1540 dmax 5ms rate 64kbps
+tc class add dev ${WEBINT} parent 1:1 classid 1:20 hfsc ls umax 1540 dmax 30ms rate 24kbps
+tc class add dev ${WEBINT} parent 1:1 classid 1:30 hfsc ls umax 1540 dmax 1000ms rate 200kbps
+tc class add dev ${WEBINT} parent 1:1 classid 1:40 hfsc ls rate 200kbps
+tc class add dev ${WEBINT} parent 1:1 classid 1:50 hfsc ls rate 2kbps #ul m2 15kbps
+
+# Ajout des feuilles de chaques classes
+tc qdisc add dev ${WEBINT} parent 1:5 handle 51: fq_codel
+tc qdisc add dev ${WEBINT} parent 1:10 handle 101: fq_codel
+#tc qdisc add dev ${WEBINT} parent 1:1000 handle 1000: sfq perturb 10
+tc qdisc add dev ${WEBINT} parent 1:20 handle 201: fq_codel target 30ms
+tc qdisc add dev ${WEBINT} parent 1:30 handle 301: fq_codel target 30ms
+tc qdisc add dev ${WEBINT} parent 1:40 handle 401: fq_codel target 1000ms
+tc qdisc add dev ${WEBINT} parent 1:50 handle 501: fq_codel target 3000ms
+
+#tc qdisc add dev ${WEBINT} parent 1:5 handle 5: pfifo
+#tc qdisc add dev ${WEBINT} parent 1:10 handle 10: pfifo
+#tc qdisc add dev ${WEBINT} parent 1:1000 handle 1000: sfq perturb 10
+#tc qdisc add dev ${WEBINT} parent 1:20 handle 20: sfq perturb 10
+#tc qdisc add dev ${WEBINT} parent 1:30 handle 30: sfq perturb 10
+#tc qdisc add dev ${WEBINT} parent 1:40 handle 40: sfq perturb 10
+#tc qdisc add dev ${WEBINT} parent 1:50 handle 50: sfq perturb 10
+
+# Redirection des marks
+#tc filter add dev ${WEBINT} parent 1:0 prio 1000 protocol ip handle 1000 fw classid 1:1000
+#tc filter add dev ${WEBINT} parent 1:0 prio 0 protocol ip handle 5 fw classid 1:5
+#tc filter add dev ${WEBINT} parent 1:0 prio 0 protocol ip handle 10 fw classid 1:10
+#tc filter add dev ${WEBINT} parent 1:0 prio 0 protocol ip handle 20 fw classid 1:20
+#tc filter add dev ${WEBINT} parent 1:0 prio 0 protocol ip handle 30 fw classid 1:30
+#tc filter add dev ${WEBINT} parent 1:0 prio 0 protocol ip handle 40 fw classid 1:40
+#tc filter add dev ${WEBINT} parent 1:0 prio 0 protocol ip handle 50 fw classid 1:50
+
+########################################### End of uplink configuration ###########################################
+
+###################################################################################################################
+
+# clear out existing setting
+iptables -t mangle -F
+#iptables -t filter -F
+
+# Paquets à destination du LAN, sans distinction
+#iptables -t mangle -A POSTROUTING -m physdev --physdev-out ${WEBINT} -d 192.168.1.0/24 -j CONNMARK --set-mark 1000
+iptables -t mangle -A POSTROUTING -m physdev --physdev-out ${WEBINT} -d 192.168.1.0/24 -j CLASSIFY --set-class 1:1000
+iptables -t mangle -A POSTROUTING -m physdev --physdev-out ${WEBINT} -d 192.168.1.0/24 -j RETURN
+#Sets high priority
+iptables -t mangle -A POSTROUTING -p icmp -j CLASSIFY --set-clas 1:10   # ICMP
+#iptables -t mangle -A POSTROUTING -p icmp -j RETURN   # ICMP
+iptables -t mangle -A POSTROUTING -p tcp --dport 22 -j CLASSIFY --set-clas 1:10   # SSH
+#iptables -t mangle -A POSTROUTING -p tcp --dport 22 -j RETURN   # SSH
+iptables -t mangle -A POSTROUTING -p tcp --dport 993 -j CLASSIFY --set-clas 1:10   # IMAP
+#iptables -t mangle -A POSTROUTING -p tcp --dport 993 -j RETURN   # IMAP
+
+# Mark traffic for shaping later
+# The lower the MARK the higher the priority
+iptables -t mangle -A POSTROUTING -p tcp --dport 80 -m physdev --physdev-out ${WEBINT} -j CLASSIFY --set-class 1:30  # http
+iptables -t mangle -A POSTROUTING -p tcp --dport 443 -m physdev --physdev-out ${WEBINT} -j CLASSIFY --set-class 1:30 # https
+
+
+# mark large downloads from squid correctly
+#iptables -t mangle -A POSTROUTING -p tcp --sport 3128 --source 10.0.0.1 -m connbytes \
+#       --connbytes 504857: --connbytes-dir both --connbytes-mode bytes -j MARK --set-mark 40
+
+# To speed up downloads while an upload is going on, put short ACK
+# packets in the interactive class:
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK ACK -m length --length :64 -j MARK --set-mark 10
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -p tcp -m tcp --tcp-flags FIN,SYN,RST -m length --length :64 -j CLASSIFY --set-class 1:10
+#iptables -t mangle -A FORWARD ! -d 192.168.1.0/24 -p tcp -m tcp --tcp-flags FIN,SYN,RST,ACK ACK -m length --length :64 -j RETURN
+#iptables -t mangle -A FORWARD ! -d 192.168.1.0/24 -p tcp -m tcp --tcp-flags FIN,SYN,RST -m length --length :64 -j RETURN
+
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 --source 192.168.1.73 -m udp -p udp -j CLASSIFY --set-class 1:5
+# Mark large downloads (> 500kb)
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m connbytes --connbytes 504857: --connbytes-dir both \
+       --connbytes-mode bytes -j CLASSIFY --set-class 1:50
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m connbytes --connbytes 504857: --connbytes-dir both \
+#       --connbytes-mode bytes -j RETURN
+# Voir si on ne réduit pas trop le dl
+
+# Maj windows
+iptables -t mangle -A POSTROUTING -m ndpi --windows_update -j CLASSIFY --set-class 1:50
+#iptables -A POSTROUTING -m ndpi --windows_update -j RETURN
+iptables -t mangle -A POSTROUTING -m ndpi --bittorrent -j CLASSIFY --set-mark 1:50
+#iptables -A POSTROUTING -m ndpi --bittorrent -j RETURN
+
+
+# Mark udp packets for gaming
+## GAME
+### UDP IP: 192.168.1.73
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 --source 192.168.1.73 -m udp -p udp -j CLASSIFY --set-class 1:5
+#### blacklist 27000:27050 (Steam), 69 (tftp), 445 (microsoft SMB)
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m udp -p udp --dport 69 -j CLASSIFY --set-class 1:50
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m udp -p udp --dport 69 -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m udp -p udp --dport 445 -j CLASSIFY --set-class 1:50
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m udp -p udp --dport 445 -j RETURN
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m udp -p udp --dport 27000:27050 -j CLASSIFY --set-class 1:50
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m udp -p udp --dport 27000:27050 -j RETURN
+
+## VOIP
+### prot RTCP, H323
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtcp -j CLASSIFY --set-class 1:5
+#iptables -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtcp -j RETURN
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --h323 -j CLASSIFY --set-class 1:5
+#iptables -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --h323 -j RETURN
+# ajouter discord et twitchApp(Curse)
+
+## STREAM
+### prot AVI, FLASH, QUICKTIME, REALMEDIA, WINDOWSMEDIA, RTSP, PPSTREAM,
+### RTP, YOUTUBE, NETFLIX, WEBM, RTMP, QUIC, TWITCH
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --steam -j CLASSIFY --set-class 1:50
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --steam -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --twitch -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --twitch -j RETURN
+iptables -t mangle  -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --avi -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --avi -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --flash -j CLASS --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --flash -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --quicktime -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --quicktime -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --realmedia -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --realmedia -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --windowsmedia -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --windowsmedia -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtsp -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtsp -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --ppstream -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --ppstream -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtp -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtp -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --youtube -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --youtube -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --netflix -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --netflix -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtmp -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --rtmp -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --quic -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --quic -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --ogg -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --ogg -j RETURN
+iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --mpeg -j CLASSIFY --set-class 1:20
+#iptables -t mangle -A POSTROUTING ! -d 192.168.1.0/24 -m ndpi --mpeg -j RETURN
+
+#iptables -t mangle -A POSTROUTING -j CONNMARK --restore-mark
+
+# Look for p2p traffic and add to p2p ipset
+# p2p traffic is detected using connlimit to look for multiple connections above port 1024
+# - this is a sure sign of p2p acitivity!
+# these users are then added to the ipset and then any traffic by the users on ports above
+# 1024 is classed as p2p
+#iptables -t mangle -A PREROUTING -p tcp -i ethX -m conntrack --ctstate INVALID -j DROP  # drop invalid connections
+iptables -t mangle -A POSTROUTING -p tcp -m physdev --physdev-out ${WEBINT} --dport 1024: -m connlimit --connlimit-above 10 \
+       -j CLASSIFY --set-class 1:50 #  Detects traffic from Users using >5 ports above 1024 and adds the source address to the P2P list.
+#iptables -t mangle -A FORWARD -o ethX -p tcp -m multiport --sport 1024:65535 -m set --set p2p dst \
+#       -j MARK --set-mark 60 #  sets incoming traffic to known P2P users from Ports >1024 to lowest priority
+#iptables -t mangle -A FORWARD -i ethX -p tcp -m multiport --dport 1024:65535 -m set --set p2p src \
+#       -j MARK --set-mark 60 #  sets outgoing traffic from known P2P users to Ports >1024 to lowest priority
+iptables -t mangle -A POSTROUTING -m physdev --physdev-out enp2s0 ! -s 192.168.1.0/24 -j CLASSIFY --set-class 1:999 
+iptables -t mangle -A POSTROUTING -m physdev --physdev-out enp3s0 ! -s 192.168.1.0/24 -j CLASSIFY --set-class 1:999 
+iptables -t mangle -A POSTROUTING -m physdev --physdev-out wlp4s0 ! -s 192.168.1.0/24 -j CLASSIFY --set-class 1:999 
+################################# End of uplink configuration #####################################################

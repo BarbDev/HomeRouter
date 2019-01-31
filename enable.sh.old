@@ -1,0 +1,10 @@
+#!/bin/bash
+
+# Nettoie la table
+iptables -t mangle -F
+
+iptables -t mangle -A POSTROUTING -p tcp --dport -m physdev --physdev-out enp1s0 80 -j MARK --set-mark 30
+iptables -t mangle -A POSTROUTING -p tcp --dport -m physdev --physdev-out enp1s0 443 -j MARK --set-mark 30
+iptables -t mangle -A POSTROUTING -p tcp --sport 80 -j MARK --set-mark 30
+iptables -t mangle -A POSTROUTING -p tcp --dport 443 -j MARK --set-mark 30
+iptables -t mangle -A POSTROUTING -p tcp --sport 443 -j MARK --set-mark 30
